@@ -49,18 +49,32 @@ def _get_ssid_linux():
     It first tries the termux-api and falls back to iwgetid if it fails.
     """
     try:
-        # Try the recommended termux-api first, as it doesn't require elevated permissions.
-        output = subprocess.check_output(
+        # Try the recommended termux-api first.
+        result = subprocess.run(
             ["termux-wifi-connectioninfo"],
-            universal_newlines=True,
-            text=True
+            capture_output=True,
+            text=True,
+            check=False, # Don't raise an exception immediately
+            timeout=10
         )
-        info = json.loads(output)
+
+        # Log any non-zero exit code or error output
+        if result.returncode != 0:
+            logging.debug(f"termux-wifi-connectioninfo failed with exit code {result.returncode}. Stderr: {result.stderr.strip()}")
+            raise ExtractionError("termux-wifi-connectioninfo failed, falling back.")
+
+        # If stdout is empty, it's likely a permission issue
+        if not result.stdout.strip():
+            logging.debug("termux-wifi-connectioninfo returned empty output, likely a permissions issue. Falling back.")
+            raise ExtractionError("termux-wifi-connectioninfo returned empty output.")
+            
+        info = json.loads(result.stdout)
         return info.get("ssid")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        logging.warning("termux-api command not found or failed, falling back to iwgetid.")
+
+    except (ExtractionError, subprocess.TimeoutExpired) as e:
+        # If termux-api fails, fall back to iwgetid for standard Linux
+        logging.warning(f"Termux-api failed: {e}. Falling back to iwgetid.")
         try:
-            # Fallback to iwgetid for standard Linux distributions
             output = subprocess.check_output(
                 ["iwgetid", "-r"],
                 universal_newlines=True,
@@ -70,6 +84,7 @@ def _get_ssid_linux():
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             raise ExtractionError(f"Error executing fallback 'iwgetid' command on Linux: {e}")
     except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse JSON from termux-wifi-connectioninfo. Raw output: '{result.stdout.strip()}'")
         raise ExtractionError(f"Error parsing termux-api output: {e}")
 
 def _get_ssid_darwin():
