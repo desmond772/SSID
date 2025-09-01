@@ -3,9 +3,10 @@ import subprocess
 import re
 import logging
 import os
+import json
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables from a .env file
 load_dotenv()
 
 # --- Configuration (can be overridden by .env) ---
@@ -43,17 +44,33 @@ def _get_ssid_windows():
         raise ExtractionError(f"Error executing 'netsh' command on Windows: {e}")
 
 def _get_ssid_linux():
-    """Extract the SSID on a Linux operating system."""
+    """
+    Extract the SSID on a Linux (including Termux) system.
+    It first tries the termux-api and falls back to iwgetid if it fails.
+    """
     try:
-        # Use iwgetid for a simple, quick way to get the SSID
+        # Try the recommended termux-api first, as it doesn't require elevated permissions.
         output = subprocess.check_output(
-            ["iwgetid", "-r"],
+            ["termux-wifi-connectioninfo"],
             universal_newlines=True,
             text=True
-        ).strip()
-        return output if output else None
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        raise ExtractionError(f"Error executing 'iwgetid' command on Linux: {e}")
+        )
+        info = json.loads(output)
+        return info.get("ssid")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        logging.warning("termux-api command not found or failed, falling back to iwgetid.")
+        try:
+            # Fallback to iwgetid for standard Linux distributions
+            output = subprocess.check_output(
+                ["iwgetid", "-r"],
+                universal_newlines=True,
+                text=True
+            ).strip()
+            return output if output else None
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            raise ExtractionError(f"Error executing fallback 'iwgetid' command on Linux: {e}")
+    except json.JSONDecodeError as e:
+        raise ExtractionError(f"Error parsing termux-api output: {e}")
 
 def _get_ssid_darwin():
     """Extract the SSID on a macOS operating system."""
@@ -112,4 +129,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
+
